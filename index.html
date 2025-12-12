@@ -19,7 +19,8 @@
     .note { font-size:12px; opacity:.75; margin-top:10px; }
     .pill { display:inline-block; padding:6px 10px; border-radius:999px; background:#222; color:#fff; font-size:12px; opacity:.85; }
     .error { background:#b00020; color:#fff; padding:10px; border-radius:10px; margin-top:12px; }
-    code { word-break: break-all; }
+    code { word-break: break-all; font-size: 12px; }
+    .muted { opacity: .7; }
   </style>
 </head>
 
@@ -30,14 +31,11 @@
       <div class="pill" id="status">Loading…</div>
       <div id="err" class="error" style="display:none;"></div>
 
-      <h2>Today</h2>
-      <div id="today"></div>
+      <h2>Current</h2>
+      <div id="current"></div>
 
-      <h2>Tomorrow</h2>
-      <div id="tomorrow"></div>
-
-      <h2>Debug (next 10 events)</h2>
-      <div id="debug"></div>
+      <h2>Next appointment</h2>
+      <div id="next"></div>
 
       <div class="note">Auto-refreshes every 5 minutes.</div>
     </div>
@@ -61,11 +59,11 @@
   const BOOKING_URL = "PASTE_BOOKING_LINK_HERE";
   const APPS_SCRIPT_PROXY = "https://script.google.com/macros/s/AKfycbwj8qKwz2oZTuXdHWpJexroYDSM-BoZUP0h4FriaBvgB2FYDLP3l8j_2UQQ_wp57lXo/exec"; // https://script.google.com/macros/s/.../exec
   const ICS_URL = "https://calendar.google.com/calendar/ical/c_494aa0780fd1753a7f0239a30cc7da00b8d05099113ce7799078445a9bacfa62%40group.calendar.google.com/public/basic.ics";
- // =========================================================
+   // =========================================================
 
   document.getElementById("roomName").textContent = ROOM_NAME;
 
-  // QR code (no libraries)
+  // QR code image (no libraries)
   document.getElementById("qrImg").src =
     "https://chart.googleapis.com/chart?cht=qr&chs=220x220&chl=" + encodeURIComponent(BOOKING_URL);
   document.getElementById("bookUrlText").textContent = BOOKING_URL;
@@ -76,20 +74,18 @@
     el.innerHTML = msg;
   }
 
-  function sameDay(a, b) {
-    return a.getFullYear()===b.getFullYear() && a.getMonth()===b.getMonth() && a.getDate()===b.getDate();
-  }
   function fmtTime(d) {
     return d.toLocaleTimeString([], { hour:"2-digit", minute:"2-digit" });
   }
+
   function escapeHtml(s) {
     return String(s || "").replace(/[&<>"']/g, c => ({
       "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"
     }[c]));
   }
 
-  function renderList(el, list, big=true) {
-    el.innerHTML = list.length ? "" : "<div style='opacity:.7'>No reservations</div>";
+  function renderList(el, list, big=true, emptyText="Available") {
+    el.innerHTML = list.length ? "" : `<div class="muted">${escapeHtml(emptyText)}</div>`;
     for (const e of list) {
       const div = document.createElement("div");
       div.className = big ? "event" : "smallEvent";
@@ -103,6 +99,18 @@
 
   async function load() {
     try {
+      // Basic config sanity checks (helps catch typos)
+      if (!APPS_SCRIPT_PROXY.includes("/exec")) {
+        showError("Your APPS_SCRIPT_PROXY must be the deployed <code>/exec</code> URL (not <code>/dev</code>).");
+        document.getElementById("status").textContent = "Config error";
+        return;
+      }
+      if (!ICS_URL.includes(".ics")) {
+        showError("ICS_URL doesn’t look like an .ics link. Use Google Calendar → Settings → Integrate → Public iCal address.");
+        document.getElementById("status").textContent = "Config error";
+        return;
+      }
+
       const url = APPS_SCRIPT_PROXY + "?ics=" + encodeURIComponent(ICS_URL);
       console.log("Fetching:", url);
 
@@ -113,8 +121,6 @@
       console.log("Data:", data);
 
       const now = new Date();
-      const today0 = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-      const tomorrow0 = new Date(today0); tomorrow0.setDate(today0.getDate() + 1);
 
       const parsed = (data.events || []).map(e => ({
         start: new Date(e.start),
@@ -123,24 +129,32 @@
       })).filter(e => !isNaN(e.start) && !isNaN(e.end))
         .sort((a,b) => a.start - b.start);
 
-      const todays = parsed.filter(e => sameDay(e.start, today0));
-      const tomorrows = parsed.filter(e => sameDay(e.start, tomorrow0));
+      // Current: event happening right now
+      const current = parsed.filter(e => e.start <= now && e.end > now).slice(0, 1);
 
-      const next10 = parsed.filter(e => e.end > now).slice(0, 10);
-      const upcoming = parsed.filter(e => e.end > now).slice(0, 6);
+      // Next: next event after now
+      const nextAppt = parsed.filter(e => e.start > now).slice(0, 1);
 
-      renderList(document.getElementById("today"), todays, true);
-      renderList(document.getElementById("tomorrow"), tomorrows, true);
-      renderList(document.getElementById("debug"), next10, false);
-      renderList(document.getElementById("upcoming"), upcoming, false);
+      // Upcoming list
+      const upcoming = parsed.filter(e => e.end > now).slice(0, 8);
+
+      renderList(document.getElementById("current"), current, true, "Available now");
+      renderList(document.getElementById("next"), nextAppt, true, "No upcoming reservations");
+      renderList(document.getElementById("upcoming"), upcoming, false, "No upcoming reservations");
 
       document.getElementById("status").textContent =
         "Updated " + now.toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"});
 
     } catch (err) {
       console.error(err);
-      showError("Error: " + escapeHtml(err.message) + "<br><br>" +
-        "Check your config values (BOOKING_URL, APPS_SCRIPT_PROXY (/exec), ICS_URL).");
+      showError(
+        "Error: " + escapeHtml(err.message) + "<br><br>" +
+        "Tips:<ul>" +
+        "<li>Make sure APPS_SCRIPT_PROXY ends with <code>/exec</code></li>" +
+        "<li>Make sure the Apps Script deployment access is <b>Anyone</b></li>" +
+        "<li>Make sure the calendar is public and you used the <b>Public iCal</b> URL</li>" +
+        "</ul>"
+      );
       document.getElementById("status").textContent = "Error";
     }
   }
