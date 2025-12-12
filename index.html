@@ -9,27 +9,29 @@
     .wrap { display:grid; grid-template-columns: 2fr 1fr; min-height:100vh; }
     .main { padding:32px; }
     .side { background:#ddd; color:#000; padding:20px; }
-    h1 { margin:0 0 8px 0; font-size:28px; opacity:.9; }
-    .day { margin-top:18px; }
+    h1 { margin:0 0 8px 0; font-size:28px; opacity:.92; }
+    h2 { margin:18px 0 10px 0; font-size:18px; opacity:.9; }
     .event { padding:14px 0; border-bottom:1px solid rgba(255,255,255,.15); }
     .time { font-size:14px; opacity:.8; }
-    .title { font-size:24px; font-weight:700; margin-top:4px; }
+    .title { font-size:22px; font-weight:700; margin-top:4px; }
     .smallEvent { padding:10px 0; border-bottom:1px solid rgba(0,0,0,.15); }
-    .qr { margin-top:18px; background:#fff; padding:10px; display:inline-block; border-radius:8px; }
+    .qr { margin-top:10px; background:#fff; padding:10px; display:inline-block; border-radius:10px; }
     .note { font-size:12px; opacity:.75; margin-top:10px; }
+    .pill { display:inline-block; padding:6px 10px; border-radius:999px; background:#222; color:#fff; font-size:12px; opacity:.85; }
   </style>
 </head>
 <body>
   <div class="wrap">
     <div class="main">
       <h1 id="roomName">Room Schedule</h1>
+      <div class="pill" id="lastUpdated">Loading…</div>
 
-      <div class="day">
+      <div>
         <h2>Today</h2>
         <div id="today"></div>
       </div>
 
-      <div class="day">
+      <div>
         <h2>Tomorrow</h2>
         <div id="tomorrow"></div>
       </div>
@@ -40,11 +42,11 @@
     <div class="side">
       <h2>Book this room</h2>
       <div class="qr">
-        <img id="qrImg" alt="QR" />
+        <img id="qrImg" alt="QR code" />
       </div>
-      <div style="margin-top:10px; font-size:14px;" id="bookUrlText"></div>
+      <div style="margin-top:10px; font-size:13px; word-break:break-all;" id="bookUrlText"></div>
 
-      <h3 style="margin-top:22px;">Upcoming</h3>
+      <h2 style="margin-top:22px;">Upcoming</h2>
       <div id="upcoming"></div>
     </div>
   </div>
@@ -57,70 +59,68 @@
   const ICS_URL = " https://calendar.google.com/calendar/ical/c_494aa0780fd1753a7f0239a30cc7da00b8d05099113ce7799078445a9bacfa62%40group.calendar.google.com/public/basic.ics";
  
   // ======================
+ document.getElementById("roomName").textContent = ROOM_NAME;
 
-  document.getElementById("roomName").textContent = ROOM_NAME;
-
-  // QR via Google's chart endpoint (simple + no libraries)
-  const qr = document.getElementById("qrImg");
+  // QR code image (simple, no libraries)
   const qrSize = "220x220";
-  qr.src = "https://chart.googleapis.com/chart?cht=qr&chs=" + qrSize + "&chl=" + encodeURIComponent(BOOKING_URL);
+  document.getElementById("qrImg").src =
+    "https://chart.googleapis.com/chart?cht=qr&chs=" + qrSize + "&chl=" + encodeURIComponent(BOOKING_URL);
   document.getElementById("bookUrlText").textContent = BOOKING_URL;
 
-  function parseIcsDate(s) {
-    // Handles basic formats like 20251212T150000Z or 20251212T150000
-    if (!s) return null;
-    const z = s.endsWith("Z");
-    const clean = z ? s.slice(0, -1) : s;
-    const y = clean.slice(0,4), mo = clean.slice(4,6), d = clean.slice(6,8);
-    const hh = clean.slice(9,11) || "00", mm = clean.slice(11,13) || "00", ss = clean.slice(13,15) || "00";
-    const iso = `${y}-${mo}-${d}T${hh}:${mm}:${ss}${z ? "Z" : ""}`;
-    return new Date(iso);
+  function sameDay(a, b) {
+    return a.getFullYear()===b.getFullYear() && a.getMonth()===b.getMonth() && a.getDate()===b.getDate();
   }
 
   function fmtTime(d) {
     return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   }
 
-  function sameDay(a, b) {
-    return a.getFullYear()===b.getFullYear() && a.getMonth()===b.getMonth() && a.getDate()===b.getDate();
+  function renderList(el, list, big=true) {
+    el.innerHTML = list.length ? "" : "<div style='opacity:.7'>No reservations</div>";
+    for (const e of list) {
+      const div = document.createElement("div");
+      div.className = big ? "event" : "smallEvent";
+      const titleClass = big ? "title" : "";
+      div.innerHTML = `
+        <div class="time">${fmtTime(e.start)} – ${fmtTime(e.end)}</div>
+        <div class="${titleClass}">${escapeHtml(e.summary)}</div>
+      `;
+      el.appendChild(div);
+    }
+  }
+
+  function escapeHtml(s) {
+    return String(s || "").replace(/[&<>"']/g, c => ({
+      "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"
+    }[c]));
   }
 
   async function load() {
     const url = APPS_SCRIPT_PROXY + "?ics=" + encodeURIComponent(ICS_URL);
-    const res = await fetch(url);
+    const res = await fetch(url, { cache: "no-store" });
     const data = await res.json();
 
     const now = new Date();
-    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const tomorrow = new Date(today); tomorrow.setDate(today.getDate()+1);
+    const today0 = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const tomorrow0 = new Date(today0); tomorrow0.setDate(today0.getDate() + 1);
 
     const parsed = (data.events || []).map(e => {
-      const start = parseIcsDate(e.dtstart);
-      const end = parseIcsDate(e.dtend);
+      const start = new Date(e.start);
+      const end = e.end ? new Date(e.end) : null;
       return { start, end, summary: e.summary || "Reserved" };
-    }).filter(e => e.start && e.end)
-      .sort((a,b)=>a.start-b.start);
+    }).filter(e => e.start instanceof Date && !isNaN(e.start) && e.end instanceof Date && !isNaN(e.end))
+      .sort((a,b) => a.start - b.start);
 
-    const todays = parsed.filter(e => sameDay(e.start, today));
-    const tomorrows = parsed.filter(e => sameDay(e.start, tomorrow));
-    const upcoming = parsed.filter(e => e.end > now).slice(0, 5);
+    const todays = parsed.filter(e => sameDay(e.start, today0));
+    const tomorrows = parsed.filter(e => sameDay(e.start, tomorrow0));
+    const upcoming = parsed.filter(e => e.end > now).slice(0, 6);
 
-    const renderList = (el, list, small=false) => {
-      el.innerHTML = list.length ? "" : "<div style='opacity:.7'>No reservations</div>";
-      for (const e of list) {
-        const div = document.createElement("div");
-        div.className = small ? "smallEvent" : "event";
-        div.innerHTML = `
-          <div class="time">${fmtTime(e.start)} – ${fmtTime(e.end)}</div>
-          <div class="${small ? "" : "title"}">${e.summary}</div>
-        `;
-        el.appendChild(div);
-      }
-    };
+    renderList(document.getElementById("today"), todays, true);
+    renderList(document.getElementById("tomorrow"), tomorrows, true);
+    renderList(document.getElementById("upcoming"), upcoming, false);
 
-    renderList(document.getElementById("today"), todays);
-    renderList(document.getElementById("tomorrow"), tomorrows);
-    renderList(document.getElementById("upcoming"), upcoming, true);
+    document.getElementById("lastUpdated").textContent =
+      "Updated " + now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   }
 
   load();
